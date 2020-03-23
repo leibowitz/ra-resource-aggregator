@@ -362,7 +362,7 @@ class DataProvider {
     for (let resourceName in resources) {
       const resource = resources[resourceName];
 
-      if (resource.main) {
+      if (resource.main === true) {
         let newParams;
         if (resource.params) {
           newParams = resource.params(params);
@@ -429,7 +429,7 @@ class DataProvider {
 
   runNonAccumulateUpdateQuery = (resource, resourceName, params) => {
     let id;
-    if (resource.main) {
+    if (resource.main === true) {
       id = params.id;
     } else {
       id = resource.data.id;
@@ -453,7 +453,7 @@ class DataProvider {
     let mainResource;
     let mainResourceName;
     for (let resourceName in resources) {
-      if (resources[resourceName].main) {
+      if (resources[resourceName].main === true) {
         mainResource = resources[resourceName];
         mainResourceName = resourceName;
         break;
@@ -471,7 +471,7 @@ class DataProvider {
     const queries = [];
     for (let resourceName in resources) {
       const resource = resources[resourceName];
-      if (resource.main) {
+      if (resource.main === true) {
         continue;
       }
 
@@ -524,7 +524,7 @@ class DataProvider {
     // delete from all other resources
     for (let resourceName in resources) {
       const resource = resources[resourceName];
-      if (resource.main) {
+      if (resource.main === true) {
         continue;
       }
 
@@ -546,7 +546,7 @@ class DataProvider {
 
     // delete from main resource
     for (let resourceName in resources) {
-      if (resources[resourceName].main) {
+      if (resources[resourceName].main === true) {
         return this.dataProvider('DELETE', resourceName, {
           id: params.id,
           previousData: {}
@@ -621,7 +621,7 @@ class DataProvider {
     // aggregate all other resource data
     for (let resourceName in resources) {
       const resource = resources[resourceName];
-      if (resource.main) {
+      if (resource.main === true) {
         continue;
       }
 
