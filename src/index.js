@@ -80,7 +80,7 @@ class DataProvider {
   };
 
   handleGetList = async (params, resources) => {
-    const queries = this.runGetQueries({
+    const queries = await this.runGetQueries({
       queryType: 'GET_LIST',
       resources,
       params
@@ -357,7 +357,7 @@ class DataProvider {
     };
   };
 
-  runGetQueries = ({ queryType, resources, params }) => {
+  runGetQueries = async ({ queryType, resources, params }) => {
     const queries = [];
     for (let resourceName in resources) {
       const resource = resources[resourceName];
@@ -372,18 +372,18 @@ class DataProvider {
 
         if (queryType === 'GET_LIST') {
           queries.push({
-            query: this.getAllRecords({ resourceName, filter: newParams.filter }),
+            query: await this.getAllRecords({ resourceName, filter: newParams.filter }),
             resourceName
           });
         } else if (queryType === 'GET_ONE') {
           queries.push({
-            query: this.dataProvider('GET_ONE', resourceName, params),
+            query: await this.dataProvider('GET_ONE', resourceName, params),
             resourceName
           });
         }
       } else {
         queries.push({
-          query: this.getAllRecords({ resourceName }),
+          query: await this.getAllRecords({ resourceName }),
           resourceName
         });
       }
