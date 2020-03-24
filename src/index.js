@@ -85,56 +85,7 @@ class DataProvider {
       resources,
       params
     });
-    const result = await this.handleGetQueries(queries, resources);
-    const data = Object.values(result.data);
-
-    let pageData;
-    if (this.options.pageSort) {
-      pageData = this.getPage(data, params.pagination);
-      this.sortData(pageData, params.sort);
-    } else {
-      this.sortData(data, params.sort);
-      pageData = this.getPage(data, params.pagination);
-    }
-
-    return {
-      data: pageData,
-      total: result.total
-    };
-  };
-
-  getPage = (data, { page, perPage }) => {
-    const indexStart = (page - 1) * perPage;
-    return data.slice(indexStart, indexStart + perPage);
-  };
-
-  sortData = (data, { field, order }) => {
-    data.sort((a, b) => {
-      if (
-        typeof a[field] === 'object' ||
-        typeof a[field] === 'undefined' ||
-        typeof a[field] === 'symbol'
-      ) {
-        return 1;
-      }
-
-      let first, second;
-      if (order === 'ASC') {
-        first = a[field];
-        second = b[field];
-      } else {
-        first = b[field];
-        second = a[field];
-      }
-
-      if (first > second) {
-        return 1;
-      }
-      if (first === second) {
-        return 0;
-      }
-      return -1;
-    });
+    return await this.handleGetQueries(queries, resources);
   };
 
   handleGetOne = async (params, resources) => {
@@ -357,33 +308,127 @@ class DataProvider {
     };
   };
 
+  isFieldFrom = (field, fields) => {
+    return fields.indexOf(field) !== -1;
+  };
+
+  sortResources = field => (a, b) => {
+    const aField = a.fields.indexOf(field);
+    const bField = b.fields.indexOf(field);
+    // sort sorted resource first
+    if (aField === -1 && bField === -1) {
+      // and sort main resource first after that
+      if (aField.main === true) {
+        return -1;
+      } else if (bField.main === true) {
+        return 1;
+      }
+      return 0;
+    }
+    if (aField === -1) {
+      return 1;
+    }
+    return -1;
+  };
+
+  getResourceIds = (resource, data) => {
+    let keys = resource.fk || [];
+    if (keys.length === 0) {
+      keys = ['id'];
+    }
+    return keys.reduce(
+      (obj, key) => ({ ...obj, [key]: data.map(row => row[key]) }),
+      {}
+    );
+  };
+
+  getParams = (resource, sort, params, filterIds = []) => {
+    let newParams = { filter: { ...params.filter }, sort: { ...params.sort } };
+    if (resource.params) {
+      newParams = resource.params(newParams);
+    }
+
+    let pagination = {};
+    // Check if sort field is from this resource
+    if (sort) {
+      if (params.pagination) {
+        pagination = params.pagination;
+      }
+      if (resource.main.length) {
+        newParams.filter[resource.main] = {};
+      }
+    } else {
+      // Fix sorting for other resources
+      newParams.sort = { field: 'id', order: 'DESC' };
+      filterIds.map(filter => {
+        if (
+          resource[filter.name] &&
+          (resource.main === true || resource.main === filter.name)
+        ) {
+          Object.keys(resource[filter.name]).map(filterField => {
+            const idsField = resource[filter.name][filterField];
+            newParams.filter[filterField] = { _in: filter[idsField] };
+          });
+        }
+      });
+    }
+
+    newParams.pagination = pagination;
+
+    return newParams;
+  };
+
   runGetQueries = async ({ queryType, resources, params }) => {
     const queries = [];
-    for (let resourceName in resources) {
-      const resource = resources[resourceName];
+    const resourcesArray = Object.keys(resources).map(function(key) {
+      return { ...resources[key], resourceName: key };
+    });
+    // Get resource with sorting field first
+    resourcesArray.sort(this.sortResources(params.sort.field));
+
+    // To store ids to retrieve resources from
+    let filterIds = [];
+
+    for (let i = 0; i < resourcesArray.length; i++) {
+      const resource = resourcesArray[i];
+      const resourceName = resource.resourceName;
+
+      const resourceSort = this.isFieldFrom(params.sort.field, resource.fields);
+      let newParams = this.getParams(
+        resource,
+        resourceSort,
+        { ...params, filter: params.filter },
+        filterIds
+      );
 
       if (resource.main === true) {
-        let newParams;
-        if (resource.params) {
-          newParams = resource.params(params);
-        } else {
-          newParams = { ...params };
-        }
-
         if (queryType === 'GET_LIST') {
+          const result = await this.getAllRecords({
+            resourceName,
+            ...newParams
+          });
+          filterIds.push({
+            name: resourceName,
+            ...this.getResourceIds(resource, result.data)
+          });
           queries.push({
-            query: await this.getAllRecords({ resourceName, filter: newParams.filter }),
+            query: result,
             resourceName
           });
         } else if (queryType === 'GET_ONE') {
           queries.push({
-            query: await this.dataProvider('GET_ONE', resourceName, params),
+            query: this.dataProvider('GET_ONE', resourceName, { ...params }),
             resourceName
           });
         }
       } else {
+        const result = await this.getAllRecords({ resourceName, ...newParams });
+        filterIds.push({
+          name: resourceName,
+          ...this.getResourceIds(resource, result.data)
+        });
         queries.push({
-          query: await this.getAllRecords({ resourceName }),
+          query: result,
           resourceName
         });
       }
@@ -559,19 +604,21 @@ class DataProvider {
   };
 
   storeResourcesData = (resourcesData, resourceNames, resources) => {
-    resourcesData.forEach(({ data: resourceData, total: resourceTotal }, index) => {
-      const resourceName = resourceNames[index];
-      const resource = resources[resourceName];
-      if (!Array.isArray(resourceData)) {
-        resource.data = [resourceData];
-      } else {
-        resource.data = resourceData;
+    resourcesData.forEach(
+      ({ data: resourceData, total: resourceTotal }, index) => {
+        const resourceName = resourceNames[index];
+        const resource = resources[resourceName];
+        if (!Array.isArray(resourceData)) {
+          resource.data = [resourceData];
+        } else {
+          resource.data = resourceData;
+        }
+        resource.total = resourceTotal;
       }
-      resource.total = resourceTotal;
-    });
+    );
   };
 
-  addFieldData = ({ aggregatedData, row, key, field, accumulate = false }) => {
+  addFieldData = ({ dst, row, field, accumulate = false }) => {
     let srcField, dstField;
     if (typeof field === 'string') {
       dstField = field;
@@ -582,13 +629,13 @@ class DataProvider {
     }
 
     if (accumulate) {
-      if (aggregatedData.data[key][dstField]) {
-        aggregatedData.data[key][dstField].push(row[srcField]);
+      if (dst[dstField]) {
+        dst[dstField].push(row[srcField]);
       } else {
-        aggregatedData.data[key][dstField] = [row[srcField]];
+        dst[dstField] = [row[srcField]];
       }
     } else {
-      aggregatedData.data[key][dstField] = row[srcField];
+      dst[dstField] = row[srcField];
     }
   };
 
@@ -602,22 +649,29 @@ class DataProvider {
       resource => resource.main === true
     );
 
-    const aggregatedData = {data: {}, total: mainResource.total};
+    const aggregatedData = { data: [], total: mainResource.total };
 
     mainResource.data.forEach(row => {
       const key = mainResource.key(row, resources);
-      aggregatedData.data[key] = {};
+      const dst = {};
       mainResource.fields.forEach(field => {
         this.addFieldData({
-          aggregatedData,
+          dst,
           row,
-          key,
           field,
           accumulate: false
         });
       });
+      this.getRelatedResourcesData(resources, dst);
+      aggregatedData.data.push(dst);
     });
 
+    return aggregatedData;
+  };
+
+  getRelationshipFields = map => {};
+
+  getRelatedResourcesData = (resources, dst) => {
     // aggregate all other resource data
     for (let resourceName in resources) {
       const resource = resources[resourceName];
@@ -627,23 +681,27 @@ class DataProvider {
 
       resource.data.forEach(row => {
         const key = resource.key(row, resources);
-        if (!aggregatedData.data[key]) {
-          // row has no relation with main resource data
+        if (!key) {
           return;
         }
 
-        resource.fields.forEach(field => {
-          this.addFieldData({
-            aggregatedData,
-            row,
-            key,
-            field,
-            accumulate: resource.accumulate
+        Object.keys(resource[resource.main]).forEach(fieldKey => {
+          if (dst[fieldKey] !== key) {
+            // row has no relation with main resource data
+            return;
+          }
+
+          resource.fields.forEach(field => {
+            this.addFieldData({
+              dst,
+              row,
+              field,
+              accumulate: resource.accumulate
+            });
           });
         });
       });
     }
-    return aggregatedData;
   };
 
   disaggregateData = (params, resources, key) => {
@@ -678,10 +736,15 @@ class DataProvider {
     }
   };
 
-  getAllRecords = ({ resourceName, filter = {} }) => {
+  getAllRecords = ({
+    resourceName,
+    filter = {},
+    pagination = {},
+    sort = { field: 'id', order: 'DESC' }
+  }) => {
     return this.dataProvider('GET_LIST', resourceName, {
-      pagination: { page: 1, perPage: null },
-      sort: { field: 'id', order: 'DESC' },
+      pagination: pagination,
+      sort: sort,
       filter
     });
   };
